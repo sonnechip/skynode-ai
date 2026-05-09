@@ -1,226 +1,193 @@
+"""
+flight_agent.py
+────────────────────────────────────────────────────────────
+Flight Search Agent — SkyNode AI Backend
+Wraps flight_core.py search logic into a clean Agent class.
+Outputs structured FlightSearchResult that MilesAgent can consume.
+"""
+
 import os
 import json
-import ollama
-from serpapi import GoogleSearch
-from dotenv import load_dotenv
+from dataclasses import dataclass, asdict, field
+from openai import OpenAI
 
-load_dotenv()
-# Đây là key hệ thống, bạn sẽ cấu hình trong Secrets của Streamlit Cloud
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+# Import existing flight core (your team's code — untouched)
+from flight_core import (
+    search_flights_api,
+    extract_intent,
+    get_airport_code,
+    format_duration,
+    format_price,
+    AIRPORT_CODES,
+    AIRLINE_NAMES,
+)
 
-# =========================================
-# IATA AIRPORT CODES – English Focused
-# =========================================
+# ============================================================
+# OUTPUT SCHEMA  (MilesAgent reads this)
+# ============================================================
 
-AIRPORT_CODES = {
-    # Vietnam
-    "hanoi": "HAN", "ha noi": "HAN", "hn": "HAN", "han": "HAN",
-    "ho chi minh": "SGN", "saigon": "SGN", "sgn": "SGN", "hcm": "SGN",
-    "da nang": "DAD", "danang": "DAD", "dad": "DAD",
-    "phu quoc": "PQC", "pqc": "PQC",
-    "nha trang": "CXR", "cxr": "CXR",
-    "hai phong": "HPH", "hph": "HPH",
-    
-    # Asia & Global
-    "bangkok": "BKK", "bkk": "BKK",
-    "singapore": "SIN", "sin": "SIN",
-    "tokyo": "NRT", "nrt": "NRT",
-    "osaka": "KIX", "kix": "KIX",
-    "seoul": "ICN", "incheon": "ICN", "icn": "ICN",
-    "taipei": "TPE", "taiwan": "TPE", "tpe": "TPE",
-    "hong kong": "HKG", "hkg": "HKG",
-    "london": "LHR", "lhr": "LHR",
-    "paris": "CDG", "cdg": "CDG",
-    "new york": "JFK", "jfk": "JFK",
-    "los angeles": "LAX", "lax": "LAX",
-}
+@dataclass
+class FlightRecord:
+    airline: str
+    flight_number: str
+    origin: str
+    destination: str
+    departure_time: str
+    arrival_time: str
+    price_usd: float
+    fare_class: str          # "Economy" / "Business" / "First"
+    duration_minutes: int
+    stops: int
+    is_best: bool = False
+    route: str = ""          # auto-filled: "HAN-NRT"
 
-AIRLINE_NAMES = {
-    "VN": "Vietnam Airlines", "VJ": "VietJet Air", "QH": "Bamboo Airways",
-    "CX": "Cathay Pacific", "SQ": "Singapore Airlines", "TG": "Thai Airways",
-    "KE": "Korean Air", "JL": "Japan Airlines", "NH": "ANA", "EK": "Emirates",
-    "QR": "Qatar Airways", "BA": "British Airways", "AF": "Air France",
-}
+    def to_dict(self) -> dict:
+        return asdict(self)
 
-def get_airport_code(text: str) -> str:
-    text_lower = text.lower().strip()
-    if text_lower in AIRPORT_CODES:
-        return AIRPORT_CODES[text_lower]
-    if len(text) == 3 and text.isupper():
-        return text
-    for key, code in AIRPORT_CODES.items():
-        if text_lower in key or key in text_lower:
-            return code
-    return text.upper()[:3]
+@dataclass
+class FlightSearchResult:
+    success: bool
+    origin: str
+    destination: str
+    date: str
+    flights: list[FlightRecord] = field(default_factory=list)
+    error_message: str = ""
+    agent_name: str = "FlightSearchAgent"
 
-def get_airline_name(code: str) -> str:
-    return AIRLINE_NAMES.get(code.upper(), code)
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["flights"] = [asdict(f) for f in self.flights]
+        return d
 
-# =========================================
-# SERPAPI – CẬP NHẬT ĐỂ NHẬN API KEY TỪ UI
-# =========================================
-
-def search_flights(origin: str, destination: str, date: str,
-                   return_date: str = None, adults: int = 1,
-                   travel_class: int = 1, api_key: str = None) -> dict:
-    """
-    api_key: Nếu người dùng nhập ở Sidebar, giá trị này sẽ được ưu tiên.
-    """
-    try:
-        # Cơ chế ưu tiên: Key từ giao diện > Key từ hệ thống (.env/Secrets)
-        final_key = api_key if api_key else SERPAPI_KEY
-        
-        if not final_key:
-            return {
-                "success": False, 
-                "message": "Missing API Key. Please provide one in the sidebar.", 
-                "flights": []
+    def to_miles_agent_input(self) -> list[dict]:
+        """
+        Convert to the format MilesArchitectAgent.analyze() expects:
+        [{"airline": str, "price_usd": float, "fare_class": str, "route": str}, ...]
+        """
+        return [
+            {
+                "airline": f.airline,
+                "price_usd": f.price_usd,
+                "fare_class": f.fare_class,
+                "route": f.route or f"{f.origin}-{f.destination}",
             }
+            for f in self.flights
+        ]
 
-        params = {
-            "engine": "google_flights",
-            "departure_id": origin,
-            "arrival_id": destination,
-            "outbound_date": date,
-            "adults": adults,
-            "travel_class": travel_class,
-            "currency": "USD",
-            "hl": "en",
-            "api_key": final_key, # Sử dụng key đã xác định
-        }
-        
-        if return_date:
-            params["return_date"] = return_date
-            params["type"] = "1"
-        else:
-            params["type"] = "2"
 
-        search = GoogleSearch(params)
-        results = search.get_dict()
+# ============================================================
+# FLIGHT SEARCH AGENT CLASS
+# ============================================================
 
-        # Kiểm tra lỗi từ phía SerpApi (ví dụ: Invalid Key)
-        if "error" in results:
-            return {"success": False, "message": results["error"], "flights": []}
-
-        best = results.get("best_flights", [])
-        other = results.get("other_flights", [])
-        all_flights = best + other
-
-        if not all_flights:
-            return {"success": False, "message": "No flights found for these criteria.", "flights": []}
-
-        flights = []
-        for offer in all_flights[:6]:
-            segments = offer.get("flights", [])
-            if not segments: continue
-
-            first_seg = segments[0]
-            last_seg = segments[-1]
-            airline_code = first_seg.get("airline", "?")
-
-            flights.append({
-                "airline": get_airline_name(airline_code),
-                "airline_code": airline_code,
-                "flight_number": first_seg.get("flight_number", "?"),
-                "departure_time": first_seg.get("departure_airport", {}).get("time", "?"),
-                "departure_airport": first_seg.get("departure_airport", {}).get("id", origin),
-                "arrival_time": last_seg.get("arrival_airport", {}).get("time", "?"),
-                "arrival_airport": last_seg.get("arrival_airport", {}).get("id", destination),
-                "duration": offer.get("total_duration", 0),
-                "stops": len(segments) - 1,
-                "price": offer.get("price", 0),
-                "travel_class": first_seg.get("travel_class", "Economy"),
-                "is_best": offer in best,
-            })
-
-        return {"success": True, "flights": flights, "count": len(flights)}
-
-    except Exception as e:
-        return {"success": False, "message": str(e), "flights": []}
-
-# =========================================
-# AI & FORMATTING (Giữ nguyên)
-# =========================================
-
-def extract_flight_info(user_message: str) -> dict:
-    prompt = f"""You are a flight search assistant. Extract information from the message.
-Return ONLY valid JSON:
-{{
-    "origin": "city/IATA",
-    "destination": "city/IATA",
-    "date": "YYYY-MM-DD or null",
-    "return_date": "YYYY-MM-DD or null",
-    "adults": 1,
-    "travel_class": "economy/business/first",
-    "action": "search_flight or general_question",
-    "language": "en"
-}}
-Message: "{user_message}"
-"""
-    try:
-        response = ollama.chat(
-            model="llama3",
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0}
-        )
-        content = response["message"]["content"].strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        return json.loads(content[start:end])
-    except:
-        return {"action": "general_question", "language": "en"}
-
-def format_duration(minutes) -> str:
-    if not minutes: return "?"
-    h, m = divmod(int(minutes), 60)
-    return f"{h}h {m:02d}m"
-
-def format_price(price) -> str:
-    if not price:
-        return "Contact for price"
-    if isinstance(price, (int, float)):
-        return f"${price:,.0f}"
-    return f"${price}"
-
-def run_flight_skill(user_query: str, api_key_from_ui: str = None):
+class FlightSearchAgent:
     """
-    Đây là hàm thực thi chính của 'Skill' đọc lịch trình bay.
-    Nó kết hợp AI để hiểu câu hỏi và API để lấy dữ liệu.
+    Wraps flight_core.py into a callable Agent.
+
+    Usage:
+        agent = FlightSearchAgent(serpapi_key="sk-...")
+        result = agent.search("Find flights from Hanoi to Tokyo on 2026-06-01")
+        # or structured:
+        result = agent.search_structured("HAN", "NRT", "2026-06-01")
     """
-    extracted = extract_flight_info(user_query)
-    
-    if extracted.get("action") == "general_question":
-        return "Where would you like to fly to, and on what date?"
 
-    origin_code = get_airport_code(extracted.get("origin", "HAN"))
-    dest_code = get_airport_code(extracted.get("destination", "SGN"))
-    flight_date = extracted.get("date")
-
-    if not flight_date:
-        return "Please provide your travel date"
-
-    search_results = search_flights(
-        origin=origin_code,
-        destination=dest_code,
-        date=flight_date,
-        api_key=api_key_from_ui
-    )
-
-    if not search_results["success"]:
-        # Chuyển thông báo lỗi sang tiếng Anh
-        error_msg = search_results.get('message', 'No schedules found.')
-        return f"Error: {error_msg}"
-
-    flights = search_results["flights"]
-    # Tiêu đề chuyên nghiệp
-    response = f"✈️ **Flight schedule from {origin_code} to {dest_code} on {flight_date}:**\n\n"
-    
-    for f in flights:
-        response += (
-            f"- **{f['airline']}** ({f['flight_number']})\n"
-            f"  🕒 {f['departure_time']} ➔ {f['arrival_time']} "
-            f"({format_duration(f['duration'])})\n"
-            f"  💰 Price from: {format_price(f['price'])}\n"
-            f"  --- \n"
+    def __init__(self, serpapi_key: str = None):
+        self.serpapi_key = serpapi_key or os.environ.get("SERPAPI_KEY", "")
+        self.model_name = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+        self.client = OpenAI(
+            base_url=os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1"),
+            api_key="not-required",
         )
-    return response
+
+    # ── Public API ─────────────────────────────────────────
+
+    def search(self, user_message: str) -> FlightSearchResult:
+        """
+        Natural language entry: parse intent then search.
+        """
+        info = extract_intent(user_message)
+
+        if info.get("action") != "search_flight":
+            return FlightSearchResult(
+                success=False,
+                origin="", destination="", date="",
+                error_message="Could not extract flight intent from message.",
+            )
+
+        origin_raw = info.get("origin", "")
+        dest_raw   = info.get("destination", "")
+        date       = info.get("date", "")
+
+        if not origin_raw or not dest_raw or not date:
+            return FlightSearchResult(
+                success=False,
+                origin=origin_raw, destination=dest_raw, date=date,
+                error_message="Missing origin, destination, or date.",
+            )
+
+        origin_code = get_airport_code(origin_raw)
+        dest_code   = get_airport_code(dest_raw)
+        return self._do_search(origin_code, dest_code, date,
+                               info.get("return_date"), info.get("adults", 1))
+
+    def search_structured(
+        self,
+        origin: str,
+        destination: str,
+        date: str,
+        return_date: str = None,
+        adults: int = 1,
+    ) -> FlightSearchResult:
+        """
+        Structured entry: pass IATA codes directly.
+        """
+        return self._do_search(
+            get_airport_code(origin),
+            get_airport_code(destination),
+            date, return_date, adults,
+        )
+
+    # ── Internal ───────────────────────────────────────────
+
+    def _do_search(
+        self,
+        origin: str,
+        destination: str,
+        date: str,
+        return_date: str = None,
+        adults: int = 1,
+    ) -> FlightSearchResult:
+        raw = search_flights_api(
+            origin, destination, date, return_date, adults,
+            api_key=self.serpapi_key,
+        )
+
+        if not raw.get("success") or not raw.get("flights"):
+            return FlightSearchResult(
+                success=False,
+                origin=origin, destination=destination, date=date,
+                error_message=raw.get("message", "No flights found."),
+            )
+
+        records = []
+        for f in raw["flights"]:
+            price = float(f.get("price", 0))
+            records.append(FlightRecord(
+                airline=f.get("airline", "Unknown"),
+                flight_number=f.get("flight_number", ""),
+                origin=f.get("departure_airport", origin),
+                destination=f.get("arrival_airport", destination),
+                departure_time=f.get("departure_time", ""),
+                arrival_time=f.get("arrival_time", ""),
+                price_usd=price,
+                fare_class=f.get("travel_class", "Economy"),
+                duration_minutes=int(f.get("duration", 0) or 0),
+                stops=int(f.get("stops", 0) or 0),
+                is_best=bool(f.get("is_best", False)),
+                route=f"{origin}-{destination}",
+            ))
+
+        return FlightSearchResult(
+            success=True,
+            origin=origin, destination=destination, date=date,
+            flights=records,
+        )
