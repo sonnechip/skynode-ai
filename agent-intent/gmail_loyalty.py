@@ -42,3 +42,26 @@ if __name__ == "__main__":
     creds = gmail_login()
 
     print("✅ Gmail login successful!")
+
+from googleapiclient.discovery import build
+
+if __name__ == "__main__":
+    print("Logging into Gmail...")
+
+    creds = gmail_login()
+
+    print("✅ Gmail login successful!")
+
+    service = build('gmail', 'v1', credentials=creds)
+
+    results = service.users().messages().list(
+        userId='me',
+        maxResults=5
+    ).execute()
+
+    messages = results.get('messages', [])
+
+    print("\nRecent Emails:")
+
+    for msg in messages:
+        print(msg)
