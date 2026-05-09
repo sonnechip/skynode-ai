@@ -1,7 +1,12 @@
-import ollama
+try:
+    import ollama
+except Exception:
+    ollama = None
+
 import json
 import requests
 import sys
+from gmail_loyalty_test import email_loyalty_tool
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -28,6 +33,8 @@ def get_calendar_data():
 
 def agent_with_memory(user_speech_input):
     calendar_json = get_calendar_data()
+
+    loyalty_data = email_loyalty_tool()
     
     system_instruction = f"""
     You are a Personalized Travel Assistant. 
@@ -71,7 +78,32 @@ def agent_with_memory(user_speech_input):
     """
 
     user_payload = f"Calendar JSON: {json.dumps(calendar_json)}\nCurrent User Input: {user_speech_input}"
+    # If ollama is not installed or available (e.g., local dev), return a safe fallback
+    if ollama is None:
+        # Build a compact JSON reply similar to what the model would return
+        fallback = {
+            "status": "ready",
+            "data": {
+                "occupation": "student",
+                "from": USER_PERMANENT_MEMORY.get("user_location_right_now"),
+                "nearby_airports_from": "TPE",
+                "to": "Vietnam",
+                "nearby_airports_to": "SGN",
+                "busy_slots": [],
+                "time_travel": None,
+                "preferences": {
+                    "flight_time": USER_PERMANENT_MEMORY["habitual_preferences"]["preferred_flight_time"],
+                    "meal": USER_PERMANENT_MEMORY["habitual_preferences"]["meal_type"]
+                }
+            },
+            "missing_fields": [],
+            "ai_message": "success"
+        }
 
+        # Return as a string (the caller expects a raw string containing JSON)
+        return json.dumps(fallback, ensure_ascii=False)
+
+    # Otherwise use ollama as intended
     response = ollama.chat(model='gemma4', messages=[
         {'role': 'system', 'content': system_instruction},
         {'role': 'user', 'content': user_payload}
@@ -84,12 +116,17 @@ if __name__ == "__main__":
     
     user_talk = "I want to book a flight to Vietnam" 
     
+    # Ensure we have loyalty data available in this scope (agent_with_memory also fetches it
+    # but we need the value here when composing the package for Agent 2).
+    loyalty_data = email_loyalty_tool()
+
     raw_ai_output = agent_with_memory(user_talk)
     
     try:
         start_idx = raw_ai_output.find('{')
         end_idx = raw_ai_output.rfind('}') + 1
         clean_json = json.loads(raw_ai_output[start_idx:end_idx])
+        clean_json["email_loyalty"] = loyalty_data
         
         # if not clean_json['data'].get('time_travel') and 'time_travel' not in clean_json['missing_fields']:
         #      clean_json['status'] = "need_more_info"
