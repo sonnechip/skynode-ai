@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-
+from .gmail_loyalty_test import email_loyalty_tool
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI()
@@ -69,6 +69,11 @@ async def get_calendar():
                 user_tokens["current_user"] = f.read()
         else:
             return {"error": "Please login first at /login"}
+        
+
+@app.get("/loyalty")
+def loyalty():
+    return email_loyalty_tool()
     
     from google.oauth2.credentials import Credentials
     creds_data = json.loads(user_tokens["current_user"])
