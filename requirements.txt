@@ -1,0 +1,14 @@
+# Web Frameworks and UI
+streamlit
+fastapi
+uvicorn
+
+# AI and API Communication
+openai
+requests
+python-dotenv
+google-search-results
+
+# Google Authentication and Calendar
+google-auth-oauthlib
+google-api-python-client
