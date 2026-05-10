@@ -1,6 +1,0 @@
-google_auth_oauthlib
-ollama
-fastapi
-uvicorn
-google-auth-oauthlib
-google-api-python-client
