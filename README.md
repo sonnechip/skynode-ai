@@ -61,7 +61,7 @@ cd skynode-ai
 ## 2. Install Dependencies
 
 ```bash
-pip install streamlit ollama google-search-results python-dotenv
+pip install -r requirements.txt
 ```
 
 ---
@@ -72,16 +72,14 @@ Download Ollama:
 
 https://ollama.com
 
-Pull the LLaMA 3 model:
-
 ```bash
-ollama pull llama3
+curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-Start Ollama:
+Run the Gemma4 Model
 
 ```bash
-ollama serve
+ollama run gemma4
 ```
 
 ---
