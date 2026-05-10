@@ -1,6 +1,6 @@
 # ✈️ SkyNode AI
 
-AI-powered flight planning assistant built with Streamlit, Ollama (LLaMA 3), and SerpApi.  
+AI-powered flight planning assistant built with Streamlit, Gemma4, and SerpApi.  
 Optimized for intelligent travel search, multilingual interaction, and AMD AI acceleration.
 
 ---
