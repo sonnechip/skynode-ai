@@ -128,6 +128,12 @@ Find me a flight from Hanoi to Singapore on 2026-08-15
 Tìm vé máy bay từ Hà Nội đến Bangkok ngày 20 tháng 7 năm 2026
 ```
 
+## Chinese
+
+```text
+帮我查找 2026 年 8 月 03 號从新竹飞往新加坡。
+```
+
 ## Round Trip
 
 ```text
